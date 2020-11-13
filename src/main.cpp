@@ -1,9 +1,10 @@
 #include <Arduino.h>
+#define BLYNK_PRINT Serial
 #include <HX711.h>
 #include <DHT.h>
 #include "WiFi.h"
 #include <ESP32Servo.h>
-
+#include <BlynkSimpleEsp32.h>
 Servo myservo;  // create servo object to control a servo
 const int servoPin = 13;
 
@@ -20,7 +21,11 @@ float duration, distance;
 #define DHTTYPE DHT11
 
 const char* ssid = "Sundaya Office";
-const char* password =  "Sundaya2019";
+const char* pass =  "Sundaya2019";
+
+char auth[] = "9xSpQPwhPoiHQl2TqDefj3XOWrjZ2YtQ";
+char server[] = "119.18.158.237";
+int port = 3579;
 
 HX711 hx_kotoran;
 HX711 hx_pakan;
@@ -36,67 +41,17 @@ const int pwmChannel = 0;
 const int resolution = 8;
 int dutyCycle = 200;
 
-void setup() {
+BlynkTimer timer;
 
-  Serial.begin(9600);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.println("Connecting to WiFi..");
-  }
-  Serial.println("Connected to the WiFi network");
-  pinMode(trig_m, OUTPUT);
-  pinMode(echo_m, INPUT);
-  pinMode(trig_p, OUTPUT);
-  pinMode(echo_p, INPUT);
+int get_weight(HX711 hx){
+  int val = hx.get_units(10);
+  Serial.println(hx.get_units(10), 1);
 
-  pinMode(motor1Pin1, OUTPUT);
-  pinMode(motor1Pin2, OUTPUT);
-  pinMode(enable1Pin, OUTPUT);
-  // configure LED PWM functionalitites
-  ledcSetup(pwmChannel, freq, resolution);
-
-  // attach the channel to the GPIO to be controlled
-  ledcAttachPin(enable1Pin, pwmChannel);
-  hx_kotoran.begin(DAT_PIN_K, SCK_PIN_K);
-  hx_pakan.begin(DAT_PIN_P, SCK_PIN_P);
-	ESP32PWM::allocateTimer(0);
-	ESP32PWM::allocateTimer(1);
-	ESP32PWM::allocateTimer(2);
-	ESP32PWM::allocateTimer(3);
-	myservo.setPeriodHertz(50);    // standard 50 hz servo
-	myservo.attach(servoPin, 500, 2400); // attaches the servo on pin 18 to the servo object
-  dht.begin();
-}
-
-void loop() {
-  float h = dht.readHumidity();
-  float t = dht.readTemperature();
-
-  if (isnan(h) || isnan(t)) {
-    Serial.println(F("Failed to read from DHT sensor!"));
-    return;
-  }
-
-  Serial.print("one reading:\t");
-  Serial.print(hx_kotoran.get_units(), 1);
-  Serial.print("\t| average:\t");
-  Serial.println(hx_kotoran.get_units(10), 1);
-
-  hx_kotoran.power_down();			        // put the ADC in sleep mode
+  hx.power_down();			        // put the ADC in sleep mode
   delay(10);
-  hx_kotoran.power_up();
-  Serial.print("one reading:\t");
-  Serial.print(hx_pakan.get_units(), 1);
-  Serial.print("\t| average:\t");
-  Serial.println(hx_pakan.get_units(10), 1);
-
-  hx_pakan.power_down();			        // put the ADC in sleep mode
-  delay(10);
-  hx_pakan.power_up();
+  hx.power_up();
+  return val;
 }
-
-
 void calibrate(){
   hx_kotoran.set_scale();
   hx_kotoran.tare();
@@ -155,4 +110,69 @@ void close(){
 		myservo.write(30);    // tell servo to go to position in variable 'pos'
 		delay(1000);             // waits 15ms for the servo to reach the position
 		myservo.write(60);    // tell servo to go to position in variable 'pos'
+}
+
+void setPwm(int dutyCycle){
+    ledcWrite(pwmChannel, dutyCycle);
+}
+
+void push_data(){
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  if (isnan(h) || isnan(t)) {
+    Serial.println(F("Failed to read from DHT sensor!"));
+    return;
+  }
+
+  int berat_kotoran = get_weight(hx_kotoran);
+  int berat_pakan = get_weight(hx_pakan);
+  int tinggi_minum = ping_us(echo_m, trig_m);
+  int tinggi_pakan = ping_us(echo_p, trig_p);
+  Blynk.virtualWrite(V4, berat_kotoran);
+  Blynk.virtualWrite(V6, berat_pakan);
+  Blynk.virtualWrite(V2, tinggi_pakan);
+  Blynk.virtualWrite(V0, tinggi_minum);
+  Blynk.virtualWrite(V5, t);
+  Blynk.virtualWrite(V7, h);
+}
+
+void setup() {
+
+  Serial.begin(9600);
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.println("Connecting to WiFi..");
+  }
+  Serial.println("Connected to the WiFi network");
+  pinMode(trig_m, OUTPUT);
+  pinMode(echo_m, INPUT);
+  pinMode(trig_p, OUTPUT);
+  pinMode(echo_p, INPUT);
+
+  pinMode(motor1Pin1, OUTPUT);
+  pinMode(motor1Pin2, OUTPUT);
+  pinMode(enable1Pin, OUTPUT);
+  // configure LED PWM functionalitites
+  ledcSetup(pwmChannel, freq, resolution);
+
+  // attach the channel to the GPIO to be controlled
+  ledcAttachPin(enable1Pin, pwmChannel);
+  hx_kotoran.begin(DAT_PIN_K, SCK_PIN_K);
+  hx_pakan.begin(DAT_PIN_P, SCK_PIN_P);
+	ESP32PWM::allocateTimer(0);
+	ESP32PWM::allocateTimer(1);
+	ESP32PWM::allocateTimer(2);
+	ESP32PWM::allocateTimer(3);
+	myservo.setPeriodHertz(50);    // standard 50 hz servo
+	myservo.attach(servoPin, 500, 2400); // attaches the servo on pin 18 to the servo object
+  dht.begin();
+  Blynk.begin(auth, ssid, pass, server, port);
+
+  timer.setInterval(5000L, push_data);
+}
+
+void loop() {
+  Blynk.run(); // Run blynk
 }
