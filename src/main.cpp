@@ -5,66 +5,85 @@
 #include "WiFi.h"
 #include <ESP32Servo.h>
 #include <BlynkSimpleEsp32.h>
-Servo myservo;  // create servo object to control a servo
-const int servoPin = 13;
+#include <env.h>
 
-const int DAT_PIN_K = 12;
-const int SCK_PIN_K = 14;
+Servo servo;  // create servo object to control a servo
+const int servoPin = 18;
+
+const int motionSensor = 25;
+
+const int DAT_PIN_K = 14;
+const int SCK_PIN_K = 12;
 const int DAT_PIN_P = 33;
 const int SCK_PIN_P = 32;
-const int trig_m = 6;            // HC-SR04 trigger pin
-const int echo_m = 7;            // HC-SR04 echo pin
+const int trig_m = 27;            // HC-SR04 trigger pin
+const int echo_m = 26;            // HC-SR04 echo pin
 const int trig_p = 22;            // HC-SR04 trigger pin
-const int echo_p = 21;            // HC-SR04 echo pin
+const int echo_p = 23;            // HC-SR04 echo pin
+
+const int r1 = 21;
+const int r2 = 19;
+const int r3 = 5;
+
 float duration, distance;
-#define DHTPIN 8
+#define DHTPIN 13
 #define DHTTYPE DHT11
 
-const char* ssid = "Sundaya Office";
-const char* pass =  "Sundaya2019";
+bool motionDetected = false;
 
-char auth[] = "9xSpQPwhPoiHQl2TqDefj3XOWrjZ2YtQ";
-char server[] = "119.18.158.237";
-int port = 3579;
+const char* ssid = "kobex";
+const char* pass =  "kobex1234";
 
 HX711 hx_kotoran;
 HX711 hx_pakan;
 DHT dht(DHTPIN, DHTTYPE);
 
-const int motor1Pin1 = 36;
-const int motor1Pin2 = 39;
-const int enable1Pin = 14;
+const int motor1Pin1 = 15;
+const int motor1Pin2 = 16;
+const int enable1Pin = 17;
 
 // Setting PWM properties
 const int freq = 30000;
 const int pwmChannel = 0;
 const int resolution = 8;
-int dutyCycle = 200;
+// int dutyCycle = 200;
 
-BlynkTimer timer;
+int dutyCycle = 180;
 
-int get_weight(HX711 hx){
-  int val = hx.get_units(10);
+
+void IRAM_ATTR detectsMovement() {
+  //Serial.println("MOTION DETECTED!!!");
+  motionDetected = true;
+}
+
+float get_weight(HX711 hx){
+  float val = hx.get_units(10);
   Serial.println(hx.get_units(10), 1);
 
   hx.power_down();			        // put the ADC in sleep mode
-  delay(10);
+  delay(250);
   hx.power_up();
   return val;
 }
 void calibrate(){
-  hx_kotoran.set_scale();
-  hx_kotoran.tare();
-  hx_kotoran.get_units(10);
+  Serial.println("Before setting up the scale:");
+  Serial.print("read: \t\t");
+  Serial.println(hx_pakan.read());			// print a raw reading from the ADC
 
-  hx_pakan.set_scale();
-  hx_pakan.tare();
-  hx_pakan.get_units(10);
+  Serial.print("read average: \t\t");
+  Serial.println(hx_pakan.read_average(20));  	// print the average of 20 readings from the ADC
 
-  hx_pakan.set_scale(2280.f);
-  hx_kotoran.set_scale(2280.f);
+  Serial.print("get value: \t\t");
+  Serial.println(hx_pakan.get_value(5));		// print the average of 5 readings from the ADC minus the tare weight (not set yet)
+
+  Serial.print("get units: \t\t");
+  Serial.println(hx_pakan.get_units(5), 1);	// print the average of 5 readings from the ADC minus tare weight (not set) divided
+						// by the SCALE parameter (not set yet)
+
+  hx_pakan.set_scale(-97);
+  // hx_kotoran.set_scale(2280.f);
   hx_pakan.tare();
-  hx_kotoran.tare();
+  // hx_kotoran.tare();
 }
 
 int ping_us(int echoPin, int trigPin){
@@ -79,42 +98,36 @@ int ping_us(int echoPin, int trigPin){
   return distance;
 }
 
-void forward(){
-  Serial.println("Moving Forward");
-  digitalWrite(motor1Pin1, LOW);
-  digitalWrite(motor1Pin2, HIGH);
-  delay(2000);
+void setPwm(int dutyCycle){
+    ledcWrite(pwmChannel, dutyCycle);
 }
 
-void backward(){
-    Serial.println("Moving Backwards");
+void bersihkan_kotoran(){
+
+  ledcWrite(pwmChannel, dutyCycle);
+  // Move DC motor backwards at maximum speed
+  Serial.println("Moving Backwards");
   digitalWrite(motor1Pin1, HIGH);
   digitalWrite(motor1Pin2, LOW);
-  delay(2000);
-}
+  delay(1600);
 
-void stop(){
+ // Stop the DC motor
   Serial.println("Motor stopped");
   digitalWrite(motor1Pin1, LOW);
   digitalWrite(motor1Pin2, LOW);
   delay(1000);
+//   Move the DC motor forward at maximum speed
+  Serial.println("Moving Forward");
+  digitalWrite(motor1Pin1, LOW);
+  digitalWrite(motor1Pin2, HIGH);
+  delay(1400);
+  // Stop the DC motor
+  Serial.println("Motor stopped");
+  digitalWrite(motor1Pin1, LOW);
+  digitalWrite(motor1Pin2, LOW);
+  delay(1000); 
 }
 
-void open(){
-		myservo.write(100);    // tell servo to go to position in variable 'pos'
-		delay(1000);             // waits 15ms for the servo to reach the position
-		myservo.write(60);    // tell servo to go to position in variable 'pos'
-}
-
-void close(){
-		myservo.write(30);    // tell servo to go to position in variable 'pos'
-		delay(1000);             // waits 15ms for the servo to reach the position
-		myservo.write(60);    // tell servo to go to position in variable 'pos'
-}
-
-void setPwm(int dutyCycle){
-    ledcWrite(pwmChannel, dutyCycle);
-}
 
 void push_data(){
   float h = dht.readHumidity();
@@ -125,26 +138,51 @@ void push_data(){
     return;
   }
 
-  int berat_kotoran = get_weight(hx_kotoran);
-  int berat_pakan = get_weight(hx_pakan);
-  int tinggi_minum = ping_us(echo_m, trig_m);
-  int tinggi_pakan = ping_us(echo_p, trig_p);
-  Blynk.virtualWrite(V4, berat_kotoran);
-  Blynk.virtualWrite(V6, berat_pakan);
+  // float berat_kotoran = get_weight(hx_kotoran);
+  // float berat_pakan = get_weight(hx_pakan);
+  int tinggi_pakan = 20 - ping_us(echo_p, trig_p);
+  int tinggi_minum = 15 - ping_us(echo_m, trig_m);
+  // int berat_kotoran = 100;
+  // int berat_pakan = 200;
+  // int tinggi_minum = 30;
+  // int tinggi_pakan = 20;
+
+  Serial.print('ultra minum :');
+  Serial.println(tinggi_minum);
+  Serial.print('ultra pakan :');
+  Serial.println(tinggi_pakan);
+  // Serial.print(t);
+  // Serial.print(" ");
+  // Serial.println(h);
+  // Serial.println(berat_kotoran);
+  // Serial.println(berat_pakan);
+  // Blynk.virtualWrite(V4, berat_kotoran);
+  // Blynk.virtualWrite(V6, berat_pakan);
   Blynk.virtualWrite(V2, tinggi_pakan);
   Blynk.virtualWrite(V0, tinggi_minum);
-  Blynk.virtualWrite(V5, t);
-  Blynk.virtualWrite(V7, h);
+  // Blynk.virtualWrite(V5, t);
+  // Blynk.virtualWrite(V7, h);
+}
+
+
+void buka_tutup_pakan(){
+  servo.write(30);
+  delay(1000);
+  servo.write(100);
+  delay(2000);
+  servo.write(30);
 }
 
 void setup() {
 
-  Serial.begin(9600);
+  Serial.begin(115200);
   WiFi.begin(ssid, pass);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.println("Connecting to WiFi..");
   }
+  attachInterrupt(digitalPinToInterrupt(motionSensor), detectsMovement, RISING);
+
   Serial.println("Connected to the WiFi network");
   pinMode(trig_m, OUTPUT);
   pinMode(echo_m, INPUT);
@@ -154,25 +192,30 @@ void setup() {
   pinMode(motor1Pin1, OUTPUT);
   pinMode(motor1Pin2, OUTPUT);
   pinMode(enable1Pin, OUTPUT);
-  // configure LED PWM functionalitites
+
+  pinMode(r1, OUTPUT);
+  pinMode(r2, OUTPUT);
+  pinMode(r3, OUTPUT);
+
   ledcSetup(pwmChannel, freq, resolution);
 
-  // attach the channel to the GPIO to be controlled
   ledcAttachPin(enable1Pin, pwmChannel);
   hx_kotoran.begin(DAT_PIN_K, SCK_PIN_K);
   hx_pakan.begin(DAT_PIN_P, SCK_PIN_P);
-	ESP32PWM::allocateTimer(0);
+
 	ESP32PWM::allocateTimer(1);
 	ESP32PWM::allocateTimer(2);
 	ESP32PWM::allocateTimer(3);
-	myservo.setPeriodHertz(50);    // standard 50 hz servo
-	myservo.attach(servoPin, 500, 2400); // attaches the servo on pin 18 to the servo object
+	servo.setPeriodHertz(50);    // standard 50 hz servo
+	servo.attach(servoPin, 500, 2400); // attaches the servo on pin 18 to the servo object
   dht.begin();
   Blynk.begin(auth, ssid, pass, server, port);
-
-  timer.setInterval(5000L, push_data);
+  // calibrate();
+  // timer.setInterval(1000L, push_data);
 }
 
 void loop() {
   Blynk.run(); // Run blynk
+  push_data();
+  bersihkan_kotoran();
 }
