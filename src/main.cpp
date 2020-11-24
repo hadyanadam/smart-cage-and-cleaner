@@ -1,6 +1,40 @@
 #include <functions.h>
 #include <env.h>
 
+int pinState = 0;
+bool pakanAda = true;
+bool minumAda = true;
+
+BLYNK_WRITE(pinDehumid) {  
+  pinState = param.asInt();
+  if(pinState == 1){
+    Serial.println("dehumid on");
+  }
+  else if(pinState == 0){
+    Serial.println("dehumid off");
+  }   
+}
+
+BLYNK_WRITE(pinKipas) {  
+  pinState = param.asInt();
+  if(pinState == 1){
+    Serial.println("kipas on");
+  }
+  else if(pinState == 0){
+    Serial.println("kipas off");
+  }   
+}
+
+BLYNK_WRITE(pinPompa) {  
+  pinState = param.asInt();
+  if(pinState == 1){
+    Serial.println("pompa on");
+  }
+  else if(pinState == 0){
+    Serial.println("pompa off");
+  }   
+}
+
 void setup() {
 
   WiFi.begin(ssid, pass);
@@ -9,7 +43,7 @@ void setup() {
     Serial.println("Connecting to WiFi..");
   }
   Serial.println("Connected to the WiFi network");
-  hx_pakan.begin(DAT_PIN_K, SCK_PIN_K);
+  hx_pakan.begin(DAT_PIN_P, SCK_PIN_P);
   hx_kotoran.begin(DAT_PIN_K, SCK_PIN_K);
   pinMode(motionSensor, INPUT_PULLUP);
   // sets the pins as outputs:
@@ -37,7 +71,7 @@ void setup() {
   servo.setPeriodHertz(50);    // standard 50 hz servo
   servo.attach(servoPin, 1000, 2000); // attaches the servo on pin 18 to the servo object
 
-  Serial.begin(115200);
+  Serial.begin(9600);
   dht.begin();
   pinMode(trig_m, OUTPUT);
   pinMode(echo_m, INPUT);
@@ -51,31 +85,63 @@ void setup() {
 
 void loop() {
   Blynk.run();
+  hx_pakan.set_scale(-109525);
+  hx_kotoran.set_scale(-179525);
   getDHT();
-  if (temp > 27){
+  if (temp > 27 && temp != 0){
     detachInterrupt(motionSensor);
     delay(250);
+    dehumidifierHandler(false);
     kipasHandler(true);
   }
-  else if (temp < 24){
+  else if (temp < 24 && temp != 0){
     detachInterrupt(motionSensor);
     delay(250);
+    kipasHandler(false);
     dehumidifierHandler(true);
+  }else{
+    attachInterrupt(digitalPinToInterrupt(motionSensor), detectsMovement, RISING);
+      kipasHandler(false);
+    dehumidifierHandler(false);
+
   }
-  attachInterrupt(digitalPinToInterrupt(motionSensor), detectsMovement, RISING);
-  float berat_pakan = hx_pakan.get_units(10);
-  float berat_kotoran = hx_pakan.get_units(10);
-  Serial.print("M one reading:\t");
+  float berat_pakan = hx_pakan.get_units(5) * 1000;
+  float berat_kotoran = hx_kotoran.get_units(5) * 1000;
+  hx_kotoran.power_down();              // put the ADC in sleep mode
+  hx_pakan.power_down();              // put the ADC in sleep mode
+  float value_water = getWaterLevel() / 10;
+  if (value_water < 2.0){
+    pompaHandler(true);
+    delay(1000);
+  }
+  else if (value_water >= 2.0){
+    pompaHandler(false);
+    delay(1000);
+  }
+  Serial.print("water level :");
+  Serial.println(value_water);
+  Serial.print("berat kotoran:\t");
   Serial.println(berat_kotoran, 1);
 
-  Serial.print("P one reading:\t");
+  Serial.print("berat pakan:\t");
   Serial.println(berat_pakan, 1);
-  hx_kotoran.power_down();              // put the ADC in sleep mode
 
-  hx_pakan.power_down();              // put the ADC in sleep mode
 
   int tinggi_pakan = 20 - ping_us(echo_p, trig_p);
   int tinggi_minum = 15 - ping_us(echo_m, trig_m);
+
+  if (tinggi_pakan < 4 && pakanAda){
+    Blynk.notify("Pakan Habis");
+    pakanAda = false;
+  }else if(tinggi_pakan >= 4){
+    pakanAda = true;
+  }
+  if (tinggi_minum < 4 && minumAda){
+    Blynk.notify("Minum Habis");
+    minumAda = false;
+  }else if (tinggi_minum >= 4){
+    minumAda = true;
+  }
 
   Serial.print("Sensor 01: ");
   Serial.print(tinggi_pakan); // Prints the distance on the default unit (centimeters)
@@ -88,17 +154,31 @@ void loop() {
   Blynk.virtualWrite(V2, tinggi_pakan);
   Blynk.virtualWrite(V0, tinggi_minum);
   Blynk.virtualWrite(V5, temp);
+  Blynk.virtualWrite(V10, value_water);
   Blynk.virtualWrite(V7, humidity);
-  Blynk.virtualWrite(V4, berat_kotoran);
+  if(berat_kotoran < 0){
+    Blynk.virtualWrite(V4, 0);
+  }else{
+    Blynk.virtualWrite(V4, berat_kotoran);
+  }
+  if(berat_pakan < 0){
+  Blynk.virtualWrite(V6, 0);
+
+  }else{
   Blynk.virtualWrite(V6, berat_pakan);
 
-  if (motionDetected){
-     motionDetected = false;
-     indicatorLed.off();
-     delay(2500);
   }
 
-  // bersihkan_kotoran();
+  if (motionDetected){
+     detachInterrupt(motionSensor);
+     motionDetected = false;
+     indicatorLed.on();
+     delay(10000);
+     indicatorLed.off();
+     bersihkan_kotoran();
+     attachInterrupt(digitalPinToInterrupt(motionSensor), detectsMovement, RISING);
+    }
+
   // buka_tutup_pakan();
   hx_kotoran.power_up();
   hx_pakan.power_up();
